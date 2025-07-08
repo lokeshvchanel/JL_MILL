@@ -1,0 +1,203 @@
+import React, { useState, useEffect, useCallback } from "react";
+import axios from "axios";
+import "./App.css";
+
+function App() {
+  const [frameUrl, setFrameUrl] = useState("");
+  const [detectionResult, setDetectionResult] = useState(null);
+  const [detectedCount, setDetectedCount] = useState(0);
+  const [isDetectionActive, setIsDetectionActive] = useState(false);
+  const [pollingInterval, setPollingInterval] = useState(null);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [supervisorName, setSupervisorName] = useState("");
+  const [vehicleNumber, setVehicleNumber] = useState("");
+  const [vehicleNumberError, setVehicleNumberError] = useState(false);
+
+  // Updated regex to include lowercase letters
+  const vehicleRegex = /^[A-Za-z]{2} \d{1,2} [A-Za-z]{1,2} \d{1,4}$/;
+
+  // Dynamic validation for the Start button
+  const isStartButtonDisabled =
+    !frameUrl.trim() ||
+    !supervisorName.trim() ||
+    !vehicleRegex.test(vehicleNumber);
+
+  const fetchDetectedCount = async (sessionId) => {
+    try {
+      const response = await axios.get(
+        `http://192.168.137.1:8000/get_detected_count/${sessionId}`
+      );
+      setDetectedCount(response.data.detected_count);
+    } catch (error) {
+      console.error("Error fetching detected count:", error);
+      stopPolling();
+    }
+  };
+
+  const stopPolling = useCallback(() => {
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
+    }
+  }, [pollingInterval]);
+
+  const startPolling = (sessionId) => {
+    if (!pollingInterval) {
+      const interval = setInterval(() => fetchDetectedCount(sessionId), 2000);
+      setPollingInterval(interval);
+    }
+  };
+
+  const handleStartDetection = async () => {
+    if (isStartButtonDisabled) {
+      setStatusMessage("Please fill in all fields correctly.");
+      return;
+    }
+
+    setIsDetectionActive(true);
+    setDetectedCount(0);
+    setStatusMessage("Loading...");
+
+    try {
+      const sessionId = Math.random().toString(36).substring(2, 10);
+      const response = await axios.post(
+        "http://192.168.137.1:8000/start_detection/",
+        {
+          video_url: frameUrl,
+          session_id: sessionId,
+        }
+      );
+
+      if (response.data.status === "Detection started") {
+        setDetectionResult(response.data);
+        setStatusMessage("Video started");
+        startPolling(sessionId);
+      } else {
+        setIsDetectionActive(false);
+        setStatusMessage("");
+      }
+    } catch (error) {
+      console.error("Error starting detection:", error);
+      setIsDetectionActive(false);
+      setStatusMessage("");
+    }
+  };
+
+  const handleStopDetection = async () => {
+    if (!vehicleRegex.test(vehicleNumber)) {
+      setVehicleNumberError(true);
+      return;
+    }
+    setVehicleNumberError(false);
+
+    setIsDetectionActive(false); // Disable the stop button immediately
+
+    try {
+      const response = await axios.post(
+        `http://192.168.137.1:8000/stop_detection/${detectionResult.session_id}`,
+        {
+          supervisor_name: supervisorName,
+          vehicle_number: vehicleNumber,
+          detected_count: detectedCount,
+        }
+      );
+      setDetectionResult(response.data);
+      setStatusMessage("Video ended");
+      stopPolling();
+    } catch (error) {
+      console.error("Error stopping detection:", error);
+    }
+  };
+
+  useEffect(() => {
+    const handleBeforeUnload = (event) => {
+      if (isDetectionActive) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      stopPolling();
+    };
+  }, [isDetectionActive, stopPolling]);
+
+  return (
+    <div className="app-container">
+      <header className="app-header">
+        <img src="/logo.jpg" alt="Logo" className="logo" />
+        <h1>Object Detection Interface</h1>
+      </header>
+
+      <input
+        type="text"
+        value={frameUrl}
+        onChange={(e) => setFrameUrl(e.target.value)}
+        placeholder="rtmp://192.168.2.183/live/stream4"
+        className="input-field"
+      />
+
+      <input
+        type="text"
+        value={supervisorName}
+        onChange={(e) => setSupervisorName(e.target.value)}
+        placeholder="Enter Supervisor Name"
+        className="input-field"
+      />
+
+      <input
+        type="text"
+        value={vehicleNumber}
+        onChange={(e) => setVehicleNumber(e.target.value)}
+        placeholder="Enter Vehicle Number"
+        className={`input-field ${vehicleNumberError ? "error" : ""}`}
+      />
+      {vehicleNumberError && (
+        <p className="error-message">Invalid vehicle number format.</p>
+      )}
+
+      <div className="button-container">
+        <button
+          onClick={handleStartDetection}
+          disabled={isStartButtonDisabled || isDetectionActive}
+          className="button start-button"
+        >
+          Start Detection
+        </button>
+        <button
+          onClick={handleStopDetection}
+          disabled={!isDetectionActive}
+          className="button stop-button"
+        >
+          Stop Detection
+        </button>
+      </div>
+
+      <div className="count-display">
+        <h2>
+          Detected Count: <span className="count">{detectedCount}</span>
+        </h2>
+      </div>
+
+      <div className="status">
+        <h2>{statusMessage}</h2>
+      </div>
+
+      {detectionResult && (
+        <div className="status">
+          <h2>Status: {detectionResult.status}</h2>
+        </div>
+      )}
+
+      {/* Stop Button in Bottom Right */}
+      <button onClick={handleStopDetection} className="stop-button-bottom">
+        Stop Detection
+      </button>
+    </div>
+  );
+}
+
+export default App;
+
